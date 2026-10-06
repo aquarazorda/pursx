@@ -1,0 +1,37 @@
+{
+  "name": "pursx",
+  "version": "0.1.0",
+  "description": "JSX syntax for PureScript, desugared to plain function calls",
+  "type": "module",
+  "bin": {
+    "pursx": "bin/pursx.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./dist/api.js"
+    }
+  },
+  "files": [
+    "bin",
+    "dist",
+    "index.d.ts"
+  ],
+  "scripts": {
+    "build": "spago build && node scripts/bundle.mjs",
+    "test": "spago test && npm run build && node test/cli/run-cli.mjs",
+    "fixtures": "spago build && node scripts/pursx-dev.mjs test/fixtures",
+    "format": "purs-tidy format-in-place \"src/**/*.purs\" \"cli/src/**/*.purs\" \"test/*.purs\" \"test/Stub/*.purs\"",
+    "format:check": "purs-tidy check \"src/**/*.purs\" \"cli/src/**/*.purs\" \"test/*.purs\" \"test/Stub/*.purs\"",
+    "prepack": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aquarazorda/pursx.git"
+  },
+  "license": "ISC",
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "purs-tidy": "0.11.1"
+  }
+}

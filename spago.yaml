@@ -1,0 +1,40 @@
+package:
+  name: pursx
+  description: JSX syntax for PureScript, desugared to plain function calls
+  publish:
+    version: 0.1.0
+    license: ISC
+    location:
+      githubOwner: aquarazorda
+      githubRepo: pursx
+  dependencies:
+    - argonaut-core
+    - arrays
+    - control
+    - either
+    - enums
+    - integers
+    - foldable-traversable
+    - foreign-object
+    - lists
+    - maybe
+    - partial
+    - prelude
+    - strings
+    - tuples
+  test:
+    main: Test.Main
+    dependencies:
+      - aff
+      - effect
+      - node-buffer
+      - node-child-process
+      - node-fs
+      - node-path
+      - node-process
+      - spec
+      - spec-node
+workspace:
+  packageSet:
+    registry: 73.0.0
+  extraPackages: {}

@@ -1,0 +1,71 @@
+module Fixture.Argument.Counter where
+
+import Prelude
+
+import Data.Array as Array
+import Stub.Component (Component)
+import Stub.Component as Component
+import Stub.H as H
+import Stub.JSX (JSX)
+import Stub.JSX as JSX
+
+-- Not JSX: comparisons, operators, strings, comments, characters.
+compare' :: Int -> Int -> Boolean
+compare' a b = a < b && (_ < b) a && "<div>" /= "" && '<' /= '>' -- <div>
+{- <span> -}
+
+type Props = { label :: String, count :: Int }
+
+counter :: Component Props
+counter = Component.component \props ->
+  <div class="counter">
+    <H.p>{props.label}</H.p>
+    <span>{show props.count}</span>
+    <button
+      onClick={\_ -> unit}
+      disabled
+      aria-label="Increment"
+    >+</button>
+  </div>
+
+list :: Array String -> JSX
+list items =
+  <ul class="list">
+    {map (\item -> <li>{item}</li>) items}
+  </ul>
+
+-- Text, entities, whitespace and comments.
+prose :: String -> JSX
+prose name =
+  <p>
+    Hello, {- a comment -} <span>{name}</span>!
+    Fish &amp; chips &lt;3
+  </p>
+
+form :: JSX
+form = <div><input value="x" /><br /></div>
+
+-- Components, with and without children.
+app :: JSX
+app =
+  <div>
+    <Counter label="Clicks" count={1 + 1} />
+    <Panel title="Hi">
+      <span>Inside</span>
+    </Panel>
+  </div>
+
+panel :: Component { title :: String, children :: JSX }
+panel = Component.component \props ->
+  <div title={props.title}>{props.children}</div>
+
+-- A do block inside a hole keeps its layout.
+nested :: Boolean -> JSX
+nested flag =
+  <div>
+    {if flag then <span>yes</span> else JSX.text "no"}
+    {let
+       total = Array.length [ 1, 2, 3 ]
+     in
+       JSX.text (show total)}
+  </div>

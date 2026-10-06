@@ -1,0 +1,17 @@
+# Dependencies and build output
+/node_modules
+/.spago
+/output
+/output-es
+/dist
+/generated-docs
+
+# PureScript tooling
+.purs-repl
+.psc-ide-port
+.psa-stash
+/.spec-results
+
+# Logs and OS files
+*.log
+.DS_Store

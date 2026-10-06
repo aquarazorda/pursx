@@ -1,0 +1,196 @@
+-- | `pursx [--watch | --check | --stdout] [--config FILE] [PATH...]`
+module PursX.Cli (main) where
+
+import Prelude
+
+import Data.Argonaut.Parser (jsonParser)
+import Data.Array as Array
+import Data.Bifunctor (lmap)
+import Data.Either (Either(..))
+import Data.Foldable (for_)
+import Data.Maybe (Maybe(..))
+import Data.String as String
+import Data.Traversable (for, traverse)
+import Effect (Effect)
+import Effect.Console (error, log)
+import Effect.Exception (try)
+import Node.Encoding (Encoding(..))
+import Node.FS.Stats (isDirectory)
+import Node.FS.Sync as FS
+import Node.Path as Path
+import Node.Process as Process
+import PursX (Config, defaultConfig, formatError, fromJson, transform)
+import PursX.Cli.Watch (watch)
+
+data Mode = Write | Check | Stdout
+
+derive instance Eq Mode
+
+type Options =
+  { mode :: Mode
+  , watch :: Boolean
+  , config :: Maybe String
+  , paths :: Array String
+  }
+
+usage :: String
+usage =
+  """Usage: pursx [options] [path...]
+
+Converts each .purx file under the given paths (default: the current
+directory) into a .purs file next to it. Settings come from the nearest
+pursx.json.
+
+Options:
+  --watch          Keep running, converting files as they change.
+  --check          Write nothing; fail if a .purs file is missing or stale.
+  --stdout         Print the output for one file instead of writing it.
+  --config FILE    Read settings from FILE instead of the nearest pursx.json.
+  -h, --help       Show this help."""
+
+main :: Effect Unit
+main = do
+  args <- Array.drop 2 <$> Process.argv
+  case parseArgs args { mode: Write, watch: false, config: Nothing, paths: [] } of
+    Left message -> do
+      error ("pursx: " <> message <> "\n\n" <> usage)
+      Process.setExitCode 2
+    Right Nothing -> log usage
+    Right (Just options) -> run options { paths = if Array.null options.paths then [ "." ] else options.paths }
+
+parseArgs :: Array String -> Options -> Either String (Maybe Options)
+parseArgs args options = case Array.uncons args of
+  Nothing -> Right (Just options)
+  Just { head, tail } -> case head of
+    "-h" -> Right Nothing
+    "--help" -> Right Nothing
+    "--watch" -> parseArgs tail options { watch = true }
+    "--check" -> parseArgs tail options { mode = Check }
+    "--stdout" -> parseArgs tail options { mode = Stdout }
+    "--config" -> case Array.uncons tail of
+      Just { head: file, tail: rest } -> parseArgs rest options { config = Just file }
+      Nothing -> Left "--config needs a file."
+    _
+      | String.take 1 head == "-" -> Left ("Unknown option " <> head <> ".")
+      | otherwise -> parseArgs tail options { paths = Array.snoc options.paths head }
+
+run :: Options -> Effect Unit
+run options
+  | options.watch && options.mode /= Write = fail "--watch can't be combined with --check or --stdout."
+  | otherwise = do
+      found <- try (Array.concat <$> traverse findSources options.paths)
+      case found of
+        Left e -> fail (show e)
+        Right files
+          | options.mode == Stdout && Array.length files /= 1 -> fail "--stdout needs exactly one .purx file."
+          | otherwise -> do
+              results <- for files (convert options)
+              unless (Array.all identity results) (Process.setExitCode 1)
+              when options.watch do
+                log ("pursx: watching " <> String.joinWith ", " options.paths)
+                watch options.paths (onChange options)
+
+fail :: String -> Effect Unit
+fail message = do
+  error ("pursx: " <> message)
+  Process.setExitCode 1
+
+onChange :: Options -> String -> Effect Unit
+onChange options file
+  | Path.basename file == "pursx.json" = do
+      files <- Array.concat <$> traverse findSources options.paths
+      for_ files (convert options)
+  | Path.extname file == ".purx" = do
+      present <- FS.exists file
+      if present then void (convert options file) else removeGenerated file
+  | otherwise = pure unit
+
+-- | Every `.purx` file under `path`, skipping hidden directories and build
+-- | output.
+findSources :: String -> Effect (Array String)
+findSources path = do
+  stats <- FS.stat path
+  if isDirectory stats then do
+    names <- FS.readdir path
+    Array.concat <$> for (Array.filter visible names) \name -> do
+      let child = Path.concat [ path, name ]
+      childStats <- FS.stat child
+      if isDirectory childStats then findSources child
+      else pure (if Path.extname name == ".purx" then [ child ] else [])
+  else if Path.extname path == ".purx" then pure [ path ]
+  else pure []
+  where
+  visible name = String.take 1 name /= "." && not (Array.elem name [ "node_modules", "output", "output-es" ])
+
+target :: String -> String
+target file = Path.concat [ Path.dirname file, Path.basenameWithoutExt file ".purx" <> ".purs" ]
+
+-- | Appended, so the source keeps its line numbers. Also how pursx knows a
+-- | `.purs` file is its own to overwrite.
+markerPrefix :: String
+markerPrefix = "-- Generated by pursx from "
+
+marker :: String -> String
+marker file = markerPrefix <> Path.basename file <> ". Edit that file instead.\n"
+
+isGenerated :: String -> Boolean
+isGenerated = String.contains (String.Pattern markerPrefix)
+
+-- | Converts one file; `false` on failure, which has been reported.
+convert :: Options -> String -> Effect Boolean
+convert options file = do
+  source <- FS.readTextFile UTF8 file
+  config <- configFor options file
+  case config >>= \c -> lmap (formatError file) (transform c source) of
+    Left message -> error message $> false
+    Right code -> do
+      let
+        out = code <> (if String.null code || endsWithNewline code then "" else "\n") <> marker file
+        path = target file
+      existing <- readIfExists path
+      case options.mode, existing of
+        Stdout, _ -> log (if endsWithNewline code then String.take (String.length code - 1) code else code) $> true
+        Check, Just e | e == out -> pure true
+        Check, _ -> error (path <> " is out of date; run pursx.") $> false
+        Write, Just e
+          | not (isGenerated e) -> error (path <> " was not generated by pursx; not overwriting it.") $> false
+          | e == out -> pure true
+        Write, _ -> do
+          FS.writeTextFile UTF8 path out
+          when options.watch (log ("pursx: wrote " <> path))
+          pure true
+
+endsWithNewline :: String -> Boolean
+endsWithNewline s = String.lastIndexOf (String.Pattern "\n") s == Just (String.length s - 1)
+
+removeGenerated :: String -> Effect Unit
+removeGenerated file = do
+  let path = target file
+  existing <- readIfExists path
+  for_ existing \e -> when (isGenerated e) do
+    FS.unlink path
+    log ("pursx: removed " <> path)
+
+readIfExists :: String -> Effect (Maybe String)
+readIfExists path = do
+  present <- FS.exists path
+  if present then Just <$> FS.readTextFile UTF8 path else pure Nothing
+
+configFor :: Options -> String -> Effect (Either String Config)
+configFor options file = case options.config of
+  Just path -> readConfig path
+  Nothing -> do
+    dir <- Path.resolve [] (Path.dirname file)
+    nearest dir
+  where
+  nearest dir = do
+    let path = Path.concat [ dir, "pursx.json" ]
+    present <- FS.exists path
+    if present then readConfig path
+    else if Path.dirname dir == dir then pure (Right defaultConfig)
+    else nearest (Path.dirname dir)
+
+readConfig :: String -> Effect (Either String Config)
+readConfig path = do
+  text <- FS.readTextFile UTF8 path
+  pure (lmap (\e -> path <> ": " <> e) (fromJson =<< jsonParser text))
